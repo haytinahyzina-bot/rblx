@@ -182,7 +182,12 @@ local function moveStep()
     -- Find Chest & Egg yg pegang teleport kalau dia ON (biar tidak rebutan)
     if Config.FindChestEgg then return #enemies end
     local first = enemies[1]
+    -- PENGAMAN: kalau kita sendiri nyangkut di void (Y<-200), diam saja tunggu respawn.
+    -- Target ngaco (void/NaN) juga di-skip biar tidak ikut nyemplung.
     if first and first.Pos then
+        local fp, mp = first.Pos, myRoot.Position
+        if mp.Y < -200 then return #enemies end
+        if fp.Y < -200 or fp.Y ~= fp.Y or fp.X ~= fp.X or fp.Z ~= fp.Z then return #enemies end
         if Config.PositionMode == "Above" then
             pcall(function()
                 -- Hover di atas pivot target, badan horizontal menghadap target
