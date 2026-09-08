@@ -18,13 +18,17 @@ getgenv().KillAuraConfig = getgenv().KillAuraConfig or {
     Radius = 60,            -- dipakai hanya kalau UnlimitedRange = false
     AttackRange = 12,       -- jarak natural senjata: pukulan keluar hanya kalau musuh sedekat ini
     AttackDelay = 0.25,     -- jeda antar serangan (detik)
-    PlayerAbove = true,     -- player teleport ke atas kepala musuh
-    HeightOffset = 8,       -- jarak naik-turun di atas kepala musuh (studs)
+    PositionMode = "Inside",-- "Inside" = di dalam musuh sejajar tanah (seperti script Tora IsMe), "Above" = di atas kepala
+    Distance = 5,           -- jarak player dari musuh (mode Inside), meniru "Set Distance"
+    HeightOffset = 8,       -- jarak naik-turun di atas kepala musuh (mode Above)
     AutoEquip = true,       -- auto equip Weapon dari Backpack
     ExcludeNPC = true,      -- jangan serang NPC toko / dialog
     MaxTargets = 10,        -- max musuh per tick (cegah lag)
     AutoSkill = false,      -- auto pakai skill Q/E/R bergantian
     SkillDelay = 3,         -- jeda antar skill (detik)
+    WalkSpeedLock = false,  -- kunci WalkSpeed
+    WalkSpeed = 16,         -- nilai WalkSpeed (default game 16/25)
+    FindChestEgg = false,   -- auto ambil Chest & Dragon Egg (jalan kalau tidak ada musuh)
 }
 local Config = getgenv().KillAuraConfig
 local Players = game:GetService("Players")
@@ -139,13 +143,27 @@ local function attackOnce()
     local tool = ensureWeapon()
     local enemies = findEnemies(myRoot.Position)
     if #enemies == 0 then return 0 end
-    -- Player datang ke musuh terdekat: teleport ke atas kepala musuh (jarak naik-turun bisa diatur)
+    -- Player datang ke musuh terdekat.
+    -- Mode Inside (meniru script yg work): sejajar tanah di dalam musuh, offset Set Distance.
+    -- Mode Above: teleport ke atas kepala musuh (jarak naik-turun bisa diatur).
     local first = enemies[1]
-    if Config.PlayerAbove and first and first.Pos then
-        pcall(function()
-            myRoot.CFrame = CFrame.new(first.Pos + Vector3.new(0, Config.HeightOffset, 0))
-            myRoot.Velocity = Vector3.new(0, 0, 0)
-        end)
+    if first and first.Pos then
+        if Config.PositionMode == "Above" then
+            pcall(function()
+                myRoot.CFrame = CFrame.new(first.Pos + Vector3.new(0, Config.HeightOffset, 0))
+                myRoot.Velocity = Vector3.new(0, 0, 0)
+            end)
+        else
+            pcall(function()
+                local dir = myRoot.Position - first.Pos
+                dir = Vector3.new(dir.X, 0, dir.Z)
+                if dir.Magnitude < 0.5 then dir = Vector3.new(0, 0, 1) else dir = dir.Unit end
+                local targetPos = first.Pos + dir * Config.Distance
+                -- samakan tinggi pivot musuh (HRP ~2.5 di atas tanah) + hadap musuh biar natural
+                myRoot.CFrame = CFrame.new(Vector3.new(targetPos.X, first.Pos.Y, targetPos.Z), first.Pos)
+                myRoot.Velocity = Vector3.new(0, 0, 0)
+            end)
+        end
     end
     -- Serangan NATURAL: pukul hanya musuh yg masuk jarak senjata (bisa diatur jauh-dekat).
     -- Biar ayunan tidak keluar saat musuh masih jauh (kelihatan bot).
@@ -181,6 +199,54 @@ local function castNextSkill()
     end)
 end
 
+-- Find Chest & Dragon Egg: datangi yg terdekat + fire semua ProximityPrompt di dalamnya.
+-- Dijalankan hanya kalau tidak ada musuh (biar tidak rebutan teleport dengan Kill Aura).
+local function collectChestEgg()
+    local char = getCharacter()
+    local myRoot = char and getHRP(char)
+    if not myRoot then return false end
+    local myPos = myRoot.Position
+    local best, bestDist = nil, math.huge
+    local roots = {}
+    local tc = workspace:FindFirstChild("TreasureChests")
+    if tc then table.insert(roots, tc) end
+    local de = workspace:FindFirstChild("DragonEggs")
+    if de then table.insert(roots, de) end
+    if #roots == 0 then roots = { workspace } end
+    for _, scope in ipairs(roots) do
+        for _, v in ipairs(scope:GetDescendants()) do
+            if v:IsA("ProximityPrompt") and v.Enabled then
+                local holder = v.Parent
+                local part = holder and (holder:IsA("BasePart") and holder or holder:FindFirstChildWhichIsA("BasePart", true))
+                if part then
+                    local d = (part.Position - myPos).Magnitude
+                    if d < bestDist then best, bestDist = part, d end
+                end
+            end
+        end
+    end
+    if not best then return false end
+    pcall(function()
+        myRoot.CFrame = CFrame.new(best.Position + Vector3.new(0, 5, 0))
+        myRoot.Velocity = Vector3.new(0, 0, 0)
+    end)
+    task.wait(0.3)
+    pcall(function()
+        local holder = best.Parent
+        local scope = holder and holder.Parent or workspace
+        for _, p in ipairs(scope:GetDescendants()) do
+            if p:IsA("ProximityPrompt") then
+                local pp = p.Parent
+                local part = pp and (pp:IsA("BasePart") and pp or pp:FindFirstChildWhichIsA("BasePart", true))
+                if part and (part.Position - myRoot.Position).Magnitude < 20 then
+                    fireproximityprompt(p)
+                end
+            end
+        end
+    end)
+    return true
+end
+
 getgenv().KillAuraLoopRunning = getgenv().KillAuraLoopRunning or false
 getgenv().KillAuraTotalHits = getgenv().KillAuraTotalHits or 0
 
@@ -206,10 +272,29 @@ local function startLoop()
     task.spawn(function()
         local tick = 0
         while getgenv().KillAuraLoopRunning do
+            -- Kunci WalkSpeed (game suka reset)
+            if Config.WalkSpeedLock then
+                pcall(function()
+                    local c = getCharacter()
+                    local h = c and c:FindFirstChildOfClass("Humanoid")
+                    if h and h.WalkSpeed ~= Config.WalkSpeed then h.WalkSpeed = Config.WalkSpeed end
+                end)
+            end
+            local didAttack = false
             if Config.Enabled then
                 local ok, n = pcall(attackOnce)
                 if ok and n > 0 then
                     getgenv().KillAuraTotalHits = getgenv().KillAuraTotalHits + n
+                    didAttack = true
+                end
+            end
+            -- Chest & Egg hanya jalan kalau tidak ada musuh yg diserang
+            if Config.FindChestEgg and not didAttack then
+                local now = os.clock()
+                getgenv().KillAuraNextChest = getgenv().KillAuraNextChest or 0
+                if now >= getgenv().KillAuraNextChest then
+                    getgenv().KillAuraNextChest = now + 2
+                    pcall(collectChestEgg)
                 end
             end
             tick = tick + 1
@@ -313,7 +398,7 @@ local enableToggle = combatTab:CreateToggle({
         if value then
             startLoop()
             local scope = Config.UnlimitedRange and "seluruh map" or (tostring(Config.Radius) .. " studs")
-            window:Notify({ title = "Kill Aura ON", content = "Target " .. scope .. " | Di atas kepala" })
+            window:Notify({ title = "Kill Aura ON", content = "Target " .. scope .. " | " .. tostring(Config.PositionMode) })
         else
             window:Toast({ title = "Kill Aura OFF" })
         end
@@ -369,13 +454,29 @@ combatTab:CreateSlider({
     end,
 })
 
-combatTab:CreateToggle({
-    name = "Di Atas Kepala Musuh",
-    description = "Player teleport ke atas kepala musuh terdekat.",
-    flag = "KillAuraAbove",
-    value = Config.PlayerAbove,
+combatTab:CreateDropdown({
+    name = "Mode Posisi",
+    description = "Di Dalam Musuh = sejajar tanah nempel musuh (seperti script yg work). Di Atas Kepala = teleport di atas.",
+    options = { "Di Dalam Musuh", "Di Atas Kepala" },
+    value = (Config.PositionMode == "Above") and "Di Atas Kepala" or "Di Dalam Musuh",
+    flag = "KillAuraPosMode",
+    callback = function(selected)
+        -- Gen2 single-mode: callback terima string langsung
+        local v = type(selected) == "table" and selected[1] or selected
+        Config.PositionMode = (v == "Di Atas Kepala") and "Above" or "Inside"
+    end,
+})
+
+combatTab:CreateSlider({
+    name = "Set Distance",
+    description = "Jarak player dari musuh (mode Di Dalam Musuh). Meniru script Tora IsMe.",
+    range = { 2, 15 },
+    increment = 1,
+    value = Config.Distance,
+    suffix = "studs",
+    flag = "KillAuraDistance",
     callback = function(value)
-        Config.PlayerAbove = value
+        Config.Distance = value
     end,
 })
 
@@ -444,6 +545,43 @@ combatTab:CreateToggle({
     callback = function(value) Config.ExcludeNPC = value end,
 })
 
+combatTab:CreateSection({ name = "Dungeon" })
+
+combatTab:CreateToggle({
+    name = "Find Chest & Egg",
+    description = "Otomatis datangi Chest & Dragon Egg + fire prompt. Jalan kalau tidak ada musuh.",
+    flag = "KillAuraChestEgg",
+    value = Config.FindChestEgg,
+    callback = function(value)
+        Config.FindChestEgg = value
+        if value then
+            startLoop()
+            window:Notify({ title = "Chest & Egg ON", content = "Aktif saat tidak ada target musuh." })
+        end
+    end,
+})
+
+combatTab:CreateToggle({
+    name = "Kunci Walk Speed",
+    flag = "KillAuraWSLock",
+    value = Config.WalkSpeedLock,
+    callback = function(value)
+        Config.WalkSpeedLock = value
+        if value then startLoop() end
+    end,
+})
+
+combatTab:CreateSlider({
+    name = "Walk Speed",
+    range = { 16, 120 },
+    increment = 1,
+    value = Config.WalkSpeed,
+    flag = "KillAuraWS",
+    callback = function(value)
+        Config.WalkSpeed = math.floor(value)
+    end,
+})
+
 -- Keybind + Input + ColorPicker wajib di tab level (tidak boleh di dalam group)
 combatTab:CreateKeybind({
     name = "Toggle UI",
@@ -507,9 +645,18 @@ task.spawn(function()
         if window.Flags and window.Flags.KillAuraAttackRange then Config.AttackRange = window.Flags.KillAuraAttackRange end
         if window.Flags and window.Flags.KillAuraDelay then Config.AttackDelay = window.Flags.KillAuraDelay end
         if window.Flags and window.Flags.KillAuraAbove ~= nil then Config.PlayerAbove = window.Flags.KillAuraAbove end
+        if window.Flags and window.Flags.KillAuraPosMode then
+            local v = window.Flags.KillAuraPosMode
+            v = type(v) == "table" and v[1] or v
+            Config.PositionMode = (v == "Di Atas Kepala") and "Above" or "Inside"
+        end
+        if window.Flags and window.Flags.KillAuraDistance then Config.Distance = window.Flags.KillAuraDistance end
         if window.Flags and window.Flags.KillAuraHeight then Config.HeightOffset = window.Flags.KillAuraHeight end
         if window.Flags and window.Flags.KillAuraAutoSkill ~= nil then Config.AutoSkill = window.Flags.KillAuraAutoSkill end
         if window.Flags and window.Flags.KillAuraSkillDelay then Config.SkillDelay = window.Flags.KillAuraSkillDelay end
+        if window.Flags and window.Flags.KillAuraChestEgg ~= nil then Config.FindChestEgg = window.Flags.KillAuraChestEgg end
+        if window.Flags and window.Flags.KillAuraWSLock ~= nil then Config.WalkSpeedLock = window.Flags.KillAuraWSLock end
+        if window.Flags and window.Flags.KillAuraWS then Config.WalkSpeed = window.Flags.KillAuraWS end
     end)
     if Config.Enabled then startLoop() else startLoop() end -- startLoop idle (tunggu toggle), biar Stat tetap update
     logLine("UI loaded. Config Enabled=" .. tostring(Config.Enabled))
