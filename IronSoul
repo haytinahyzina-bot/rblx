@@ -22,7 +22,6 @@ getgenv().KillAuraConfig = getgenv().KillAuraConfig or {
     Distance = 5,           -- jarak player dari musuh (mode Inside), meniru "Set Distance"
     HeightOffset = 8,       -- jarak naik-turun di atas kepala musuh (mode Above)
     AutoEquip = true,       -- auto equip Weapon dari Backpack
-    ExcludeNPC = true,      -- jangan serang NPC toko / dialog
     MaxTargets = 10,        -- max musuh per tick (cegah lag)
     AutoSkill = false,      -- auto pakai skill Q/E/R bergantian
     SkillDelay = 3,         -- jeda antar skill (detik)
@@ -33,25 +32,6 @@ getgenv().KillAuraConfig = getgenv().KillAuraConfig or {
 local Config = getgenv().KillAuraConfig
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
-
-local Blacklist = {
-    "Location", "Dialog", "CoinStore", "PetNpc",
-    "Forge", "Enchant", "Sell", "Shop", "SkillPreview", "Magician",
-    "OdysseyNPC", "SacredDeath", "DialogCaveNpc", "LobbyLocationPortal",
-    "CavePortal", "Portal", "Guide", "BoardInteract", "StoneInteract",
-    "DialogEquipment", "DialogPet", "CoinStoreNpc",
-}
-
-local function isBlacklisted(obj)
-    if not Config.ExcludeNPC then return false end
-    local full = obj:GetFullName()
-    -- Musuh dungeon JANGAN pernah di-blacklist (folder EnemyNpc mengandung kata "Npc")
-    if string.find(full, "WorldEnemys") or string.find(full, "EnemyNpc") then return false end
-    for _, b in ipairs(Blacklist) do
-        if string.find(full, b) then return true end
-    end
-    return false
-end
 
 local function getCharacter()
     local c = LocalPlayer.Character
@@ -110,23 +90,23 @@ local function findEnemies(myPos)
     local scopes = (#priorityRoots > 0) and priorityRoots or { workspace }
     for _, scope in ipairs(scopes) do
         for _, v in ipairs(scope:GetDescendants()) do
-            if v:IsA("Humanoid") and v.Health > 0 then
+            local ok, info = pcall(function()
+                if not v:IsA("Humanoid") then return nil end
+                if v.Health <= 0 then return nil end
                 local model = v.Parent
-                if model and model:IsA("Model") and model ~= LocalPlayer.Character then
-                    if not Players:GetPlayerFromCharacter(model) then
-                        if not isBlacklisted(model) then
-                            local cf, pos, part = getEnemyPivot(model)
-                            if pos then
-                                local dist = (pos - myPos).Magnitude
-                                -- UnlimitedRange = true -> radius mati, selagi map ada musuh langsung target
-                                if Config.UnlimitedRange or dist <= Config.Radius then
-                                    table.insert(list, { Model = model, Humanoid = v, Root = part, Pos = pos, Dist = dist })
-                                    if #list >= Config.MaxTargets then break end
-                                end
-                            end
-                        end
-                    end
-                end
+                if not model or not model:IsA("Model") then return nil end
+                if model == LocalPlayer.Character then return nil end
+                if Players:GetPlayerFromCharacter(model) then return nil end
+                local cf, pos, part = getEnemyPivot(model)
+                if not pos then return nil end
+                local dist = (pos - myPos).Magnitude
+                -- UnlimitedRange = true -> radius mati, selagi map ada musuh langsung target
+                if not Config.UnlimitedRange and dist > Config.Radius then return nil end
+                return { Model = model, Humanoid = v, Root = part, Pos = pos, Dist = dist }
+            end)
+            if ok and info then
+                table.insert(list, info)
+                if #list >= Config.MaxTargets then break end
             end
         end
         if #list >= Config.MaxTargets then break end
@@ -226,20 +206,25 @@ local function collectChestEgg()
         end
     end
     if not best then return false end
+    -- Dekat ke prompt (3 studs), tunggu prompt ke-stream, lalu fire.
+    -- fireproximityprompt men-trigger LANGSUNG walau prompt-nya tipe "tahan F" (HoldDuration di-skip).
     pcall(function()
-        myRoot.CFrame = CFrame.new(best.Position + Vector3.new(0, 5, 0))
+        myRoot.CFrame = CFrame.new(best.Position + Vector3.new(0, 3, 0))
         myRoot.Velocity = Vector3.new(0, 0, 0)
     end)
-    task.wait(0.3)
+    task.wait(0.6)
     pcall(function()
         local holder = best.Parent
         local scope = holder and holder.Parent or workspace
         for _, p in ipairs(scope:GetDescendants()) do
-            if p:IsA("ProximityPrompt") then
+            if p:IsA("ProximityPrompt") and p.Enabled then
                 local pp = p.Parent
                 local part = pp and (pp:IsA("BasePart") and pp or pp:FindFirstChildWhichIsA("BasePart", true))
                 if part and (part.Position - myRoot.Position).Magnitude < 20 then
                     fireproximityprompt(p)
+                    task.wait(0.2)
+                    -- tembak 2x untuk prompt tahan-lama yg rewel
+                    if p.Enabled then fireproximityprompt(p) end
                 end
             end
         end
@@ -371,7 +356,7 @@ combatTab:CreateSection({ name = "Kill Aura / Auto Attack" })
 
 ui.statusText = combatTab:CreateText({
     name = "Status",
-    text = "Idle. Masuk MatchRoom/dungeon biar musuh spawn. NPC toko auto-skip.",
+    text = "Idle. Masuk dungeon biar musuh spawn.",
 })
 
 local grid = combatTab:CreateGroup()
@@ -390,7 +375,7 @@ ui.statHits = right:CreateStat({
 
 local enableToggle = combatTab:CreateToggle({
     name = "Enable Kill Aura",
-    description = "Auto serang musuh dalam radius. NPC toko di-skip.",
+    description = "Auto serang musuh terdekat di map.",
     flag = "KillAuraEnabled",
     value = Config.Enabled,
     callback = function(value)
@@ -535,14 +520,6 @@ combatTab:CreateToggle({
     flag = "KillAuraAutoEquip",
     value = Config.AutoEquip,
     callback = function(value) Config.AutoEquip = value end,
-})
-
-combatTab:CreateToggle({
-    name = "Exclude NPC",
-    description = "Skip NPC toko/dialog (disarankan ON).",
-    flag = "KillAuraExcludeNPC",
-    value = Config.ExcludeNPC,
-    callback = function(value) Config.ExcludeNPC = value end,
 })
 
 combatTab:CreateSection({ name = "Dungeon" })
