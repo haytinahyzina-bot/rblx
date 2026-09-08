@@ -75,26 +75,50 @@ local function ensureWeapon()
     return nil
 end
 
+local function getEnemyPivot(model)
+    -- Kembalikan CFrame + posisi musuh walau tanpa HumanoidRootPart (kasus dungeon: model GUID tanpa HRP)
+    local hrp = model:FindFirstChild("HumanoidRootPart")
+    if hrp and hrp:IsA("BasePart") then return hrp.CFrame, hrp.Position, hrp end
+    local pp = model.PrimaryPart
+    if pp and pp:IsA("BasePart") then return pp.CFrame, pp.Position, pp end
+    for _, c in ipairs(model:GetChildren()) do
+        if c:IsA("BasePart") then return c.CFrame, c.Position, c end
+    end
+    local ok, cf = pcall(function() return model:GetPivot() end)
+    if ok and cf then return cf, cf.Position, nil end
+    return nil, nil, nil
+end
+
 local function findEnemies(myPos)
     local list = {}
-    for _, v in ipairs(workspace:GetDescendants()) do
-        if v:IsA("Humanoid") and v.Health > 0 then
-            local model = v.Parent
-            if model and model:IsA("Model") and model ~= LocalPlayer.Character then
-                if not Players:GetPlayerFromCharacter(model) then
-                    if not isBlacklisted(model) then
-                        local eroot = model:FindFirstChild("HumanoidRootPart")
-                        if eroot then
-                            local dist = (eroot.Position - myPos).Magnitude
-                            if dist <= Config.Radius then
-                                table.insert(list, { Model = model, Humanoid = v, Root = eroot, Dist = dist })
-                                if #list >= Config.MaxTargets then break end
+    -- Prioritas 1: folder dungeon (cepat + tidak kena NPC lobby)
+    local priorityRoots = {}
+    local we = workspace:FindFirstChild("WorldEnemys")
+    if we then table.insert(priorityRoots, we) end
+    local en = workspace:FindFirstChild("EnemyNpc")
+    if en then table.insert(priorityRoots, en) end
+    local scopes = (#priorityRoots > 0) and priorityRoots or { workspace }
+    for _, scope in ipairs(scopes) do
+        for _, v in ipairs(scope:GetDescendants()) do
+            if v:IsA("Humanoid") and v.Health > 0 then
+                local model = v.Parent
+                if model and model:IsA("Model") and model ~= LocalPlayer.Character then
+                    if not Players:GetPlayerFromCharacter(model) then
+                        if not isBlacklisted(model) then
+                            local cf, pos, part = getEnemyPivot(model)
+                            if pos then
+                                local dist = (pos - myPos).Magnitude
+                                if dist <= Config.Radius then
+                                    table.insert(list, { Model = model, Humanoid = v, Root = part, Pos = pos, Dist = dist })
+                                    if #list >= Config.MaxTargets then break end
+                                end
                             end
                         end
                     end
                 end
             end
         end
+        if #list >= Config.MaxTargets then break end
     end
     table.sort(list, function(a, b) return a.Dist < b.Dist end)
     return list
@@ -110,16 +134,22 @@ local function attackOnce()
     if #enemies == 0 then return 0 end
     for _, e in ipairs(enemies) do
         pcall(function()
-            if Config.HitboxSize > 0 and e.Root then
+            -- 1. Hitbox: pakai part apa pun yg ada (HRP / PrimaryPart / BasePart pertama)
+            if Config.HitboxSize > 0 and e.Root and e.Root:IsA("BasePart") then
                 e.Root.Size = Vector3.new(Config.HitboxSize, Config.HitboxSize, Config.HitboxSize)
                 e.Root.Transparency = 0.7
                 e.Root.CanCollide = false
             end
-            if Config.Bring and e.Root then
+            -- 2. Bring: pakai PivotTo biar work walau tanpa HRP / tidak network-owned
+            if Config.Bring then
                 local targetCF = myRoot.CFrame * CFrame.new(0, 0, -Config.BringDistance)
                 pcall(function()
-                    e.Root.CFrame = targetCF
-                    e.Root.Velocity = Vector3.new(0, 0, 0)
+                    if e.Root and e.Root:IsA("BasePart") then
+                        e.Root.CFrame = targetCF
+                        e.Root.Velocity = Vector3.new(0, 0, 0)
+                    else
+                        e.Model:PivotTo(targetCF)
+                    end
                 end)
             end
         end)
@@ -374,6 +404,32 @@ combatTab:CreateKeybind({
     callback = function(key)
         -- Gen2: Show/Hide via window handle. Callback key = tombol yg ditekan.
         window:ToggleHide()
+    end,
+})
+
+combatTab:CreateButton({
+    name = "Scan Musuh Sekitar",
+    callback = function()
+        local char = getCharacter()
+        local myRoot = char and getHRP(char)
+        if not myRoot then logLine("No character/HRP"); return end
+        local all, inWE, inEN, noPart = 0, 0, 0, 0
+        for _, v in ipairs(workspace:GetDescendants()) do
+            if v:IsA("Humanoid") and v.Health > 0 then
+                local m = v.Parent
+                if m and m:IsA("Model") and m ~= LocalPlayer.Character and not Players:GetPlayerFromCharacter(m) then
+                    all = all + 1
+                    local full = m:GetFullName()
+                    if string.find(full, "WorldEnemys") then inWE = inWE + 1 end
+                    if string.find(full, "EnemyNpc") then inEN = inEN + 1 end
+                    local _, pos = getEnemyPivot(m)
+                    if not pos then noPart = noPart + 1 end
+                end
+            end
+        end
+        local found = #findEnemies(myRoot.Position)
+        logLine(string.format("NPC non-player: %d (WorldEnemys %d, EnemyNpc %d, tanpa part %d). Dalam radius %d: %d. Pos %s", all, inWE, inEN, noPart, Config.Radius, found, tostring(myRoot.Position)))
+        window:Notify({ title = "Scan", content = found .. " target dalam radius" })
     end,
 })
 
