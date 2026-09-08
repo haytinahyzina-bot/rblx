@@ -14,8 +14,9 @@ local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
 -- Config (sama key dengan versi console, biar kompatibel)
 getgenv().KillAuraConfig = getgenv().KillAuraConfig or {
     Enabled = false,
-    UnlimitedRange = true,  -- true = selagi map ada musuh langsung target (radius mati)
+    UnlimitedRange = true,  -- true = deteksi musuh seluruh map (datangi otomatis)
     Radius = 60,            -- dipakai hanya kalau UnlimitedRange = false
+    AttackRange = 12,       -- jarak natural senjata: pukulan keluar hanya kalau musuh sedekat ini
     AttackDelay = 0.25,     -- jeda antar serangan (detik)
     PlayerAbove = true,     -- player teleport ke atas kepala musuh
     HeightOffset = 8,       -- jarak naik-turun di atas kepala musuh (studs)
@@ -146,6 +147,15 @@ local function attackOnce()
             myRoot.Velocity = Vector3.new(0, 0, 0)
         end)
     end
+    -- Serangan NATURAL: pukul hanya musuh yg masuk jarak senjata (bisa diatur jauh-dekat).
+    -- Biar ayunan tidak keluar saat musuh masih jauh (kelihatan bot).
+    local myPos = myRoot.Position
+    local inRange = {}
+    for _, e in ipairs(enemies) do
+        local d = (e.Pos - myPos).Magnitude
+        if d <= Config.AttackRange then table.insert(inRange, e) end
+    end
+    if #inRange == 0 then return 0 end
     -- Auto hit TANPA visual hit (tidak ubah Size/Transparency musuh sama sekali)
     if tool then pcall(function() tool:Activate() end) end
     pcall(function()
@@ -154,7 +164,7 @@ local function attackOnce()
         local act = remotes and remotes:FindFirstChild("PlayerActionRE")
         if act then act:FireServer() end
     end)
-    return #enemies
+    return #inRange
 end
 
 -- Auto skill Q/E/R bergantian (tombol skill di HUD). Pakai VirtualInput, tanpa remote khusus.
@@ -334,6 +344,19 @@ combatTab:CreateSlider({
 })
 
 combatTab:CreateSlider({
+    name = "Jarak Serangan",
+    description = "Jarak natural senjata. Pukulan hanya keluar kalau musuh sedekat ini. Samakan dengan Tinggi biar tiap datang langsung mukul.",
+    range = { 5, 40 },
+    increment = 1,
+    value = Config.AttackRange,
+    suffix = "studs",
+    flag = "KillAuraAttackRange",
+    callback = function(value)
+        Config.AttackRange = value
+    end,
+})
+
+combatTab:CreateSlider({
     name = "Attack Delay",
     description = "Jeda antar serangan. Makin kecil makin cepat + makin berisiko.",
     range = { 0.1, 1 },
@@ -481,6 +504,7 @@ task.spawn(function()
         if saved ~= nil then Config.Enabled = saved end
         if window.Flags and window.Flags.KillAuraUnlimited ~= nil then Config.UnlimitedRange = window.Flags.KillAuraUnlimited end
         if window.Flags and window.Flags.KillAuraRadius then Config.Radius = window.Flags.KillAuraRadius end
+        if window.Flags and window.Flags.KillAuraAttackRange then Config.AttackRange = window.Flags.KillAuraAttackRange end
         if window.Flags and window.Flags.KillAuraDelay then Config.AttackDelay = window.Flags.KillAuraDelay end
         if window.Flags and window.Flags.KillAuraAbove ~= nil then Config.PlayerAbove = window.Flags.KillAuraAbove end
         if window.Flags and window.Flags.KillAuraHeight then Config.HeightOffset = window.Flags.KillAuraHeight end
