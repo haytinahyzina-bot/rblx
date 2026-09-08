@@ -13,14 +13,15 @@ local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
 
 -- Config (sama key dengan versi console, biar kompatibel)
 getgenv().KillAuraConfig = getgenv().KillAuraConfig or {
-    Enabled = false,
+    Enabled = false,        -- Auto Attack: pukul kalau musuh masuk jarak senjata
+    AutoMobs = false,       -- Auto Mobs: terbang datangi musuh (tiduran di atas kepala)
     UnlimitedRange = true,  -- true = deteksi musuh seluruh map (datangi otomatis)
     Radius = 60,            -- dipakai hanya kalau UnlimitedRange = false
     AttackRange = 12,       -- jarak natural senjata: pukulan keluar hanya kalau musuh sedekat ini
     AttackDelay = 0.25,     -- jeda antar serangan (detik)
-    PositionMode = "Inside",-- "Inside" = di dalam musuh sejajar tanah (seperti script Tora IsMe), "Above" = di atas kepala
+    PositionMode = "Above", -- "Above" = melayang tiduran di atas kepala (seperti script yg work), "Inside" = di dalam musuh sejajar tanah
     Distance = 5,           -- jarak player dari musuh (mode Inside), meniru "Set Distance"
-    HeightOffset = 8,       -- jarak naik-turun di atas kepala musuh (mode Above)
+    HeightOffset = 10,      -- jarak melayang di atas kepala musuh (mode Above)
     AutoEquip = true,       -- auto equip Weapon dari Backpack
     MaxTargets = 10,        -- max musuh per tick (cegah lag)
     AutoSkill = false,      -- auto pakai skill Q/E/R bergantian
@@ -116,35 +117,44 @@ local function findEnemies(myPos)
 end
 
 local function attackOnce()
+    -- return: jumlah musuh di map, jumlah yg diserang
     local char = getCharacter()
-    if not char then return 0 end
+    if not char then return 0, 0 end
     local myRoot = getHRP(char)
-    if not myRoot then return 0 end
+    if not myRoot then return 0, 0 end
     local tool = ensureWeapon()
     local enemies = findEnemies(myRoot.Position)
-    if #enemies == 0 then return 0 end
-    -- Player datang ke musuh terdekat.
-    -- Mode Inside (meniru script yg work): sejajar tanah di dalam musuh, offset Set Distance.
-    -- Mode Above: teleport ke atas kepala musuh (jarak naik-turun bisa diatur).
-    local first = enemies[1]
-    if first and first.Pos then
-        if Config.PositionMode == "Above" then
-            pcall(function()
-                myRoot.CFrame = CFrame.new(first.Pos + Vector3.new(0, Config.HeightOffset, 0))
-                myRoot.Velocity = Vector3.new(0, 0, 0)
-            end)
-        else
-            pcall(function()
-                local dir = myRoot.Position - first.Pos
-                dir = Vector3.new(dir.X, 0, dir.Z)
-                if dir.Magnitude < 0.5 then dir = Vector3.new(0, 0, 1) else dir = dir.Unit end
-                local targetPos = first.Pos + dir * Config.Distance
-                -- samakan tinggi pivot musuh (HRP ~2.5 di atas tanah) + hadap musuh biar natural
-                myRoot.CFrame = CFrame.new(Vector3.new(targetPos.X, first.Pos.Y, targetPos.Z), first.Pos)
-                myRoot.Velocity = Vector3.new(0, 0, 0)
-            end)
+    if #enemies == 0 then return 0, 0 end
+    -- AUTO MOBS (bisa ON/OFF sendiri): datangi musuh terdekat.
+    -- Mode Above: MELAYANG TIDURAN di atas kepala (badan horizontal, bukan berdiri).
+    -- Mode Inside: sejajar tanah di dalam musuh, offset Set Distance.
+    if Config.AutoMobs then
+        local first = enemies[1]
+        if first and first.Pos then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if Config.PositionMode == "Above" then
+                pcall(function()
+                    if hum then hum.PlatformStand = true end -- badan lemas biar pose tiduran awet
+                    myRoot.CFrame = CFrame.new(first.Pos + Vector3.new(0, Config.HeightOffset, 0), first.Pos)
+                        * CFrame.Angles(math.rad(90), 0, 0)
+                    myRoot.Velocity = Vector3.new(0, 0, 0)
+                end)
+            else
+                pcall(function()
+                    if hum then hum.PlatformStand = false end
+                    local dir = myRoot.Position - first.Pos
+                    dir = Vector3.new(dir.X, 0, dir.Z)
+                    if dir.Magnitude < 0.5 then dir = Vector3.new(0, 0, 1) else dir = dir.Unit end
+                    local targetPos = first.Pos + dir * Config.Distance
+                    -- samakan tinggi pivot musuh (HRP ~2.5 di atas tanah) + hadap musuh biar natural
+                    myRoot.CFrame = CFrame.new(Vector3.new(targetPos.X, first.Pos.Y, targetPos.Z), first.Pos)
+                    myRoot.Velocity = Vector3.new(0, 0, 0)
+                end)
+            end
         end
     end
+    -- AUTO ATTACK (bisa ON/OFF sendiri): pukul hanya musuh yg masuk jarak senjata.
+    if not Config.Enabled then return #enemies, 0 end
     -- Serangan NATURAL: pukul hanya musuh yg masuk jarak senjata (bisa diatur jauh-dekat).
     -- Biar ayunan tidak keluar saat musuh masih jauh (kelihatan bot).
     local myPos = myRoot.Position
@@ -153,7 +163,7 @@ local function attackOnce()
         local d = (e.Pos - myPos).Magnitude
         if d <= Config.AttackRange then table.insert(inRange, e) end
     end
-    if #inRange == 0 then return 0 end
+    if #inRange == 0 then return #enemies, 0 end
     -- Auto hit TANPA visual hit (tidak ubah Size/Transparency musuh sama sekali)
     if tool then pcall(function() tool:Activate() end) end
     pcall(function()
@@ -162,7 +172,7 @@ local function attackOnce()
         local act = remotes and remotes:FindFirstChild("PlayerActionRE")
         if act then act:FireServer() end
     end)
-    return #inRange
+    return #enemies, #inRange
 end
 
 -- Auto skill Q/E/R bergantian (tombol skill di HUD). Pakai VirtualInput, tanpa remote khusus.
@@ -266,15 +276,19 @@ local function startLoop()
                 end)
             end
             local didAttack = false
-            if Config.Enabled then
-                local ok, n = pcall(attackOnce)
-                if ok and n > 0 then
-                    getgenv().KillAuraTotalHits = getgenv().KillAuraTotalHits + n
-                    didAttack = true
+            local foundCount = 0
+            if Config.Enabled or Config.AutoMobs then
+                local ok, found, n = pcall(attackOnce)
+                if ok and found then
+                    foundCount = found
+                    if n > 0 then
+                        getgenv().KillAuraTotalHits = getgenv().KillAuraTotalHits + n
+                        didAttack = true
+                    end
                 end
             end
-            -- Chest & Egg hanya jalan kalau tidak ada musuh yg diserang
-            if Config.FindChestEgg and not didAttack then
+            -- Chest & Egg hanya jalan kalau tidak ada musuh di map
+            if Config.FindChestEgg and foundCount == 0 then
                 local now = os.clock()
                 getgenv().KillAuraNextChest = getgenv().KillAuraNextChest or 0
                 if now >= getgenv().KillAuraNextChest then
@@ -283,8 +297,8 @@ local function startLoop()
                 end
             end
             tick = tick + 1
-            -- Auto skill tiap SkillDelay detik (terpisah dari attack loop)
-            if Config.Enabled and Config.AutoSkill then
+            -- Auto skill tiap SkillDelay detik (toggle sendiri, tidak ikut Auto Attack)
+            if Config.AutoSkill then
                 local now = os.clock()
                 getgenv().KillAuraNextSkill = getgenv().KillAuraNextSkill or 0
                 if now >= getgenv().KillAuraNextSkill then
@@ -303,8 +317,9 @@ local function startLoop()
                     if ui.statHits then ui.statHits:Set(getgenv().KillAuraTotalHits) end
                     if ui.statusText then
                         local scope = Config.UnlimitedRange and "map" or (tostring(Config.Radius) .. " studs")
-                        if not Config.Enabled then
-                            ui.statusText:Set("Idle. ON-kan toggle, player otomatis ke atas kepala musuh.")
+                        local anyOn = Config.Enabled or Config.AutoMobs
+                        if not anyOn then
+                            ui.statusText:Set("Idle. ON-kan Auto Mobs / Auto Attack.")
                         elseif count == 0 then
                             ui.statusText:Set("ON - 0 target di " .. scope .. ". Masuk dungeon biar musuh spawn.")
                         else
@@ -321,6 +336,13 @@ end
 local function stopLoop(restore)
     getgenv().KillAuraLoopRunning = false
     Config.Enabled = false
+    Config.AutoMobs = false
+    -- balikin badan berdiri normal (matikan PlatformStand pose tiduran)
+    pcall(function()
+        local c = getCharacter()
+        local h = c and c:FindFirstChildOfClass("Humanoid")
+        if h then h.PlatformStand = false end
+    end)
     -- tidak ada visual yg diubah (tanpa visual hit), jadi tidak ada yg perlu di-restore
 end
 
@@ -374,18 +396,39 @@ ui.statHits = right:CreateStat({
 })
 
 local enableToggle = combatTab:CreateToggle({
-    name = "Enable Kill Aura",
-    description = "Auto serang musuh terdekat di map.",
+    name = "Auto Attack",
+    description = "Pukul otomatis kalau musuh masuk Jarak Serangan. Tanpa visual hit.",
     flag = "KillAuraEnabled",
     value = Config.Enabled,
     callback = function(value)
         Config.Enabled = value
         if value then
             startLoop()
-            local scope = Config.UnlimitedRange and "seluruh map" or (tostring(Config.Radius) .. " studs")
-            window:Notify({ title = "Kill Aura ON", content = "Target " .. scope .. " | " .. tostring(Config.PositionMode) })
+            window:Notify({ title = "Auto Attack ON", content = "Jarak " .. tostring(Config.AttackRange) .. " studs" })
         else
-            window:Toast({ title = "Kill Aura OFF" })
+            window:Toast({ title = "Auto Attack OFF" })
+        end
+    end,
+})
+
+local mobsToggle = combatTab:CreateToggle({
+    name = "Auto Mobs",
+    description = "Terbang datangi musuh + melayang TIDURAN di atas kepala. Bisa ON/OFF sendiri.",
+    flag = "KillAuraAutoMobs",
+    value = Config.AutoMobs,
+    callback = function(value)
+        Config.AutoMobs = value
+        if value then
+            startLoop()
+            window:Notify({ title = "Auto Mobs ON", content = "Mode " .. tostring(Config.PositionMode) })
+        else
+            -- balikin badan berdiri normal
+            pcall(function()
+                local c = getCharacter()
+                local h = c and c:FindFirstChildOfClass("Humanoid")
+                if h then h.PlatformStand = false end
+            end)
+            window:Toast({ title = "Auto Mobs OFF" })
         end
     end,
 })
@@ -576,7 +619,8 @@ combatTab:CreateButton({
         stopLoop(true)
         -- sync toggle UI tanpa fire callback berulang (skipCallback=true)
         pcall(function() enableToggle:Set(false, true) end)
-        window:Notify({ title = "Stopped", content = "Kill Aura mati." })
+        pcall(function() mobsToggle:Set(false, true) end)
+        window:Notify({ title = "Stopped", content = "Auto Mobs + Auto Attack mati, badan normal lagi." })
     end,
 })
 
@@ -617,6 +661,7 @@ task.spawn(function()
     pcall(function()
         local saved = window.Flags and window.Flags.KillAuraEnabled
         if saved ~= nil then Config.Enabled = saved end
+        if window.Flags and window.Flags.KillAuraAutoMobs ~= nil then Config.AutoMobs = window.Flags.KillAuraAutoMobs end
         if window.Flags and window.Flags.KillAuraUnlimited ~= nil then Config.UnlimitedRange = window.Flags.KillAuraUnlimited end
         if window.Flags and window.Flags.KillAuraRadius then Config.Radius = window.Flags.KillAuraRadius end
         if window.Flags and window.Flags.KillAuraAttackRange then Config.AttackRange = window.Flags.KillAuraAttackRange end
