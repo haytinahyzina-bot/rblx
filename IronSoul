@@ -1,0 +1,436 @@
+-- Iron Soul Hub (Rayfield Gen2) - Kill Aura / Auto Attack
+-- Game: Iron Soul: Dungeon | PlaceId: 117533937949084 | UniverseId: 9910245722
+-- Executor: SolaraV3
+-- Load Rayfield Gen2 Stable: https://sirius.menu/gen2
+-- Docs: https://docs.sirius.menu/rayfield-gen2 (window/tabs/elements/saving/secure-mode)
+-- WARNING: "Cheating will result in PERMANENT BAN". Test di private server / alt dulu.
+
+-- Develop dengan secure OFF, release ON (error di-swallow kalau ON).
+-- getgenv().RAYFIELD_SECURE = true
+getgenv().RAYFIELD_SECURE = false
+
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
+
+-- Config (sama key dengan versi console, biar kompatibel)
+getgenv().KillAuraConfig = getgenv().KillAuraConfig or {
+    Enabled = false,
+    Radius = 60,
+    AttackDelay = 0.25,
+    Bring = false,
+    BringDistance = 8,
+    HitboxSize = 12,
+    AutoEquip = true,
+    ExcludeNPC = true,
+    MaxTargets = 10,
+}
+local Config = getgenv().KillAuraConfig
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+local Blacklist = {
+    "Location", "Npc", "Dialog", "CoinStore", "PetNpc",
+    "Forge", "Enchant", "Sell", "SkillPreview", "Magician",
+    "OdysseyNPC", "SacredDeath", "DialogCaveNpc", "LobbyLocationPortal",
+    "CavePortal", "Portal", "Guide", "BoardInteract", "StoneInteract",
+}
+
+local function isBlacklisted(obj)
+    if not Config.ExcludeNPC then return false end
+    local full = obj:GetFullName()
+    for _, b in ipairs(Blacklist) do
+        if string.find(full, b) then return true end
+    end
+    return false
+end
+
+local function getCharacter()
+    local c = LocalPlayer.Character
+    if c and c:FindFirstChildOfClass("Humanoid") and c:FindFirstChildOfClass("Humanoid").Health > 0 then
+        return c
+    end
+    return nil
+end
+
+local function getHRP(char)
+    return char and char:FindFirstChild("HumanoidRootPart") or nil
+end
+
+local function ensureWeapon()
+    local char = getCharacter()
+    if not char then return nil end
+    for _, t in ipairs(char:GetChildren()) do
+        if t:IsA("Tool") and t.Name == "Weapon" then return t end
+    end
+    if Config.AutoEquip then
+        local bp = LocalPlayer:FindFirstChild("Backpack")
+        if bp then
+            local tool = bp:FindFirstChild("Weapon")
+            if tool then
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if hum then pcall(function() hum:EquipTool(tool) end) end
+                return tool
+            end
+        end
+    end
+    return nil
+end
+
+local function findEnemies(myPos)
+    local list = {}
+    for _, v in ipairs(workspace:GetDescendants()) do
+        if v:IsA("Humanoid") and v.Health > 0 then
+            local model = v.Parent
+            if model and model:IsA("Model") and model ~= LocalPlayer.Character then
+                if not Players:GetPlayerFromCharacter(model) then
+                    if not isBlacklisted(model) then
+                        local eroot = model:FindFirstChild("HumanoidRootPart")
+                        if eroot then
+                            local dist = (eroot.Position - myPos).Magnitude
+                            if dist <= Config.Radius then
+                                table.insert(list, { Model = model, Humanoid = v, Root = eroot, Dist = dist })
+                                if #list >= Config.MaxTargets then break end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    table.sort(list, function(a, b) return a.Dist < b.Dist end)
+    return list
+end
+
+local function attackOnce()
+    local char = getCharacter()
+    if not char then return 0 end
+    local myRoot = getHRP(char)
+    if not myRoot then return 0 end
+    local tool = ensureWeapon()
+    local enemies = findEnemies(myRoot.Position)
+    if #enemies == 0 then return 0 end
+    for _, e in ipairs(enemies) do
+        pcall(function()
+            if Config.HitboxSize > 0 and e.Root then
+                e.Root.Size = Vector3.new(Config.HitboxSize, Config.HitboxSize, Config.HitboxSize)
+                e.Root.Transparency = 0.7
+                e.Root.CanCollide = false
+            end
+            if Config.Bring and e.Root then
+                local targetCF = myRoot.CFrame * CFrame.new(0, 0, -Config.BringDistance)
+                pcall(function()
+                    e.Root.CFrame = targetCF
+                    e.Root.Velocity = Vector3.new(0, 0, 0)
+                end)
+            end
+        end)
+    end
+    if tool then pcall(function() tool:Activate() end) end
+    pcall(function()
+        local rs = game:GetService("ReplicatedStorage")
+        local remotes = rs:FindFirstChild("Remotes")
+        local act = remotes and remotes:FindFirstChild("PlayerActionRE")
+        if act then act:FireServer() end
+    end)
+    return #enemies
+end
+
+getgenv().KillAuraLoopRunning = getgenv().KillAuraLoopRunning or false
+getgenv().KillAuraTotalHits = getgenv().KillAuraTotalHits or 0
+
+-- Forward declarations buat UI handles (diisi setelah window jadi)
+local ui = {
+    statTargets = nil,
+    statHits = nil,
+    console = nil,
+    statusText = nil,
+}
+local windowRef = nil
+
+local function logLine(s)
+    pcall(function()
+        if ui.console then ui.console:Append(s) end
+    end)
+    print("[KillAura] " .. tostring(s))
+end
+
+local function startLoop()
+    if getgenv().KillAuraLoopRunning then return end
+    getgenv().KillAuraLoopRunning = true
+    task.spawn(function()
+        local tick = 0
+        while getgenv().KillAuraLoopRunning do
+            if Config.Enabled then
+                local ok, n = pcall(attackOnce)
+                if ok and n > 0 then
+                    getgenv().KillAuraTotalHits = getgenv().KillAuraTotalHits + n
+                end
+            end
+            tick = tick + 1
+            -- update Stat tiap ~1 detik (AttackDelay 0.25 -> tiap 4 tick)
+            if tick % 4 == 0 then
+                pcall(function()
+                    local char = getCharacter()
+                    local myPos = char and getHRP(char) and getHRP(char).Position or nil
+                    local count = 0
+                    if myPos then count = #findEnemies(myPos) end
+                    if ui.statTargets then ui.statTargets:Set(count) end
+                    if ui.statHits then ui.statHits:Set(getgenv().KillAuraTotalHits) end
+                    if ui.statusText then
+                        if not Config.Enabled then
+                            ui.statusText:Set("Idle. Masuk MatchRoom/dungeon biar musuh spawn. NPC toko auto-skip.")
+                        elseif count == 0 then
+                            ui.statusText:Set("ON - 0 target dalam " .. tostring(Config.Radius) .. " studs. Masuk dungeon / dekatkan musuh.")
+                        else
+                            ui.statusText:Set("ON - " .. tostring(count) .. " target. Total hits: " .. tostring(getgenv().KillAuraTotalHits))
+                        end
+                    end
+                end)
+            end
+            task.wait(Config.AttackDelay)
+        end
+    end)
+end
+
+local function stopLoop(restore)
+    getgenv().KillAuraLoopRunning = false
+    Config.Enabled = false
+    if restore == nil then restore = true end
+    if restore then
+        pcall(function()
+            for _, v in ipairs(workspace:GetDescendants()) do
+                if v:IsA("Humanoid") and v.Health > 0 then
+                    local m = v.Parent
+                    if m and m:FindFirstChild("HumanoidRootPart") then
+                        local r = m.HumanoidRootPart
+                        if r.Transparency == 0.7 then r.Transparency = 0 end
+                    end
+                end
+            end
+        end)
+    end
+end
+
+getgenv().KillAuraStart = function()
+    Config.Enabled = true
+    startLoop()
+end
+getgenv().KillAuraStop = function() stopLoop(true) end
+
+-- ============ Rayfield Gen2 UI ============
+local window = Rayfield:CreateWindow({
+    name = "Iron Soul Hub",
+    subtitle = "Jiwa Besi: Dungeon | 117533937949084",
+    sidebarLayout = true,
+    theme = "default",
+    configuration = {
+        autoSave = true,
+        autoLoad = true,
+        fileName = "IronSoulHub",
+        customFolder = "IronSoul",
+    },
+})
+windowRef = window
+
+-- Sidebar grouping (hanya efek kalau sidebarLayout=true)
+window:CreateSection({ name = "General" })
+
+local combatTab = window:CreateTab({ name = "Combat" })
+local infoTab = window:CreateTab({ name = "Info" })
+
+-- ---- Combat tab ----
+combatTab:CreateSection({ name = "Kill Aura / Auto Attack" })
+
+ui.statusText = combatTab:CreateText({
+    name = "Status",
+    text = "Idle. Masuk MatchRoom/dungeon biar musuh spawn. NPC toko auto-skip.",
+})
+
+local grid = combatTab:CreateGroup()
+local left = grid:CreateGroup({ direction = "column" })
+local right = grid:CreateGroup({ direction = "column" })
+
+-- Stat wajib di group/row? Stat compact otomatis di row. Pakai default (non-compact) aman di column.
+ui.statTargets = left:CreateStat({
+    name = "Targets",
+    value = 0,
+})
+ui.statHits = right:CreateStat({
+    name = "Total Hits",
+    value = getgenv().KillAuraTotalHits or 0,
+})
+
+local enableToggle = combatTab:CreateToggle({
+    name = "Enable Kill Aura",
+    description = "Auto serang musuh dalam radius. NPC toko di-skip.",
+    flag = "KillAuraEnabled",
+    value = Config.Enabled,
+    callback = function(value)
+        Config.Enabled = value
+        if value then
+            startLoop()
+            window:Notify({ title = "Kill Aura ON", content = "Radius " .. tostring(Config.Radius) .. " | Bring " .. tostring(Config.Bring) })
+        else
+            window:Toast({ title = "Kill Aura OFF" })
+        end
+    end,
+})
+
+combatTab:CreateSlider({
+    name = "Radius",
+    description = "Jarak serang (studs).",
+    range = { 20, 120 },
+    increment = 5,
+    value = Config.Radius,
+    suffix = "studs",
+    flag = "KillAuraRadius",
+    callback = function(value)
+        Config.Radius = value
+    end,
+})
+
+combatTab:CreateSlider({
+    name = "Attack Delay",
+    description = "Jeda antar serangan. Makin kecil makin cepat + makin berisiko.",
+    range = { 0.1, 1 },
+    increment = 0.05,
+    value = Config.AttackDelay,
+    suffix = "s",
+    flag = "KillAuraDelay",
+    callback = function(value)
+        Config.AttackDelay = value
+    end,
+})
+
+local bringToggle = combatTab:CreateToggle({
+    name = "Bring Mob",
+    description = "Tarik musuh ke depan player. Agresif, lebih berisiko.",
+    flag = "KillAuraBring",
+    value = Config.Bring,
+    callback = function(value)
+        Config.Bring = value
+        if value then
+            window:Notify({ title = "Bring ON", content = "Musuh ditarik ke depan. Pakai di private/alt dulu." })
+        end
+    end,
+})
+
+combatTab:CreateSlider({
+    name = "Bring Distance",
+    range = { 5, 20 },
+    increment = 1,
+    value = Config.BringDistance,
+    suffix = "studs",
+    flag = "KillAuraBringDist",
+    callback = function(value)
+        Config.BringDistance = value
+    end,
+})
+
+combatTab:CreateSlider({
+    name = "Hitbox Size",
+    description = "0 = mati. 12 default aman.",
+    range = { 0, 20 },
+    increment = 1,
+    value = Config.HitboxSize,
+    suffix = "studs",
+    flag = "KillAuraHitbox",
+    callback = function(value)
+        Config.HitboxSize = value
+    end,
+})
+
+combatTab:CreateSlider({
+    name = "Max Targets",
+    description = "Max musuh per tick (cegah lag).",
+    range = { 1, 20 },
+    increment = 1,
+    value = Config.MaxTargets,
+    flag = "KillAuraMaxTargets",
+    callback = function(value)
+        Config.MaxTargets = math.floor(value)
+    end,
+})
+
+combatTab:CreateToggle({
+    name = "Auto Equip Weapon",
+    flag = "KillAuraAutoEquip",
+    value = Config.AutoEquip,
+    callback = function(value) Config.AutoEquip = value end,
+})
+
+combatTab:CreateToggle({
+    name = "Exclude NPC",
+    description = "Skip NPC toko/dialog (disarankan ON).",
+    flag = "KillAuraExcludeNPC",
+    value = Config.ExcludeNPC,
+    callback = function(value) Config.ExcludeNPC = value end,
+})
+
+-- Keybind + Input + ColorPicker wajib di tab level (tidak boleh di dalam group)
+combatTab:CreateKeybind({
+    name = "Toggle UI",
+    value = Enum.KeyCode.RightShift,
+    flag = "UIKeybind",
+    callback = function(key)
+        -- Gen2: Show/Hide via window handle. Callback key = tombol yg ditekan.
+        window:ToggleHide()
+    end,
+})
+
+combatTab:CreateButton({
+    name = "Stop & Restore Hitbox",
+    callback = function()
+        stopLoop(true)
+        -- sync toggle UI tanpa fire callback berulang (skipCallback=true)
+        pcall(function() enableToggle:Set(false, true) end)
+        window:Notify({ title = "Stopped", content = "Loop mati, hitbox di-restore." })
+    end,
+})
+
+ui.console = combatTab:CreateConsole({
+    name = "Log",
+    height = 130,
+    follow = true,
+    maxLines = 200,
+})
+
+-- ---- Info tab ----
+infoTab:CreateSection({ name = "Game" })
+
+infoTab:CreateText({
+    name = "Iron Soul: Dungeon",
+    text = "PlaceId: 117533937949084\nUniverseId: 9910245722\nJobId: 3942a586-f6c0-4591-83f1-c8e3d9aa0313\nUser: Burhan_Gatel (10633534746)\nRemotes: PlayerActionRE, DmgEffectURE, GameRoundRE/MatchRE, DataRE, StatsRE\nCara pakai: masuk MatchRoom/dungeon, nyalakan toggle di tab Combat.",
+})
+
+infoTab:CreateButton({
+    name = "Copy PlaceId",
+    callback = function()
+        pcall(function() setclipboard("117533937949084") end)
+        window:Toast({ title = "Copied 117533937949084" })
+    end,
+})
+
+infoTab:CreateButton({
+    name = "Notify Test",
+    callback = function()
+        window:Notify({ title = "Iron Soul Hub", content = "Rayfield Gen2 jalan. Targets update tiap 1 detik." })
+    end,
+})
+
+-- Sync nilai awal dari autoLoad (kalau config lama Enabled=true, langsung jalan)
+task.spawn(function()
+    task.wait(0.5)
+    -- window.Flags baca live value hasil load
+    pcall(function()
+        local saved = window.Flags and window.Flags.KillAuraEnabled
+        if saved ~= nil then Config.Enabled = saved end
+        if window.Flags and window.Flags.KillAuraRadius then Config.Radius = window.Flags.KillAuraRadius end
+        if window.Flags and window.Flags.KillAuraDelay then Config.AttackDelay = window.Flags.KillAuraDelay end
+        if window.Flags and window.Flags.KillAuraBring then Config.Bring = window.Flags.KillAuraBring end
+    end)
+    if Config.Enabled then startLoop() else startLoop() end -- startLoop idle (tunggu toggle), biar Stat tetap update
+    logLine("UI loaded. Config Enabled=" .. tostring(Config.Enabled))
+end)
+
+print("[IronSoulHub] Rayfield Gen2 loaded")
+return "IronSoulHub Rayfield Gen2 loaded"
