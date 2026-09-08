@@ -179,6 +179,8 @@ local function moveStep()
     local enemies = findTargets(myRoot.Position)
     getgenv().KillAuraFound = #enemies
     if #enemies == 0 then return 0 end
+    -- Find Chest & Egg yg pegang teleport kalau dia ON (biar tidak rebutan)
+    if Config.FindChestEgg then return #enemies end
     local first = enemies[1]
     if first and first.Pos then
         if Config.PositionMode == "Above" then
@@ -251,7 +253,7 @@ local function castNextSkill()
 end
 
 -- Find Chest & Dragon Egg: datangi yg terdekat + fire semua ProximityPrompt di dalamnya.
--- Dijalankan hanya kalau tidak ada target (biar tidak rebutan teleport dengan Kill Aura).
+-- Punya prioritas teleport sendiri kalau toggle-nya ON (Auto Mobs mengalah).
 local function collectChestEgg()
     local char = getCharacter()
     local myRoot = char and getHRP(char)
@@ -266,12 +268,13 @@ local function collectChestEgg()
     if #roots == 0 then roots = { workspace } end
     for _, scope in ipairs(roots) do
         for _, v in ipairs(scope:GetDescendants()) do
-            if v:IsA("ProximityPrompt") and v.Enabled then
+            -- catat semua prompt (walau belum Enabled: ada yg baru nyala pas didekati)
+            if v:IsA("ProximityPrompt") then
                 local holder = v.Parent
                 local part = holder and (holder:IsA("BasePart") and holder or holder:FindFirstChildWhichIsA("BasePart", true))
                 if part then
                     local d = (part.Position - myPos).Magnitude
-                    if d < bestDist then best, bestDist = part, d end
+                    if d < bestDist then best, bestDist, bestPrompt = part, d, v end
                 end
             end
         end
@@ -285,6 +288,11 @@ local function collectChestEgg()
     end)
     task.wait(0.6)
     pcall(function()
+        -- target utama dulu (tahan-F di-skip oleh fireproximityprompt)
+        if bestPrompt and bestPrompt.Enabled then
+            fireproximityprompt(bestPrompt)
+            task.wait(0.3)
+        end
         local holder = best.Parent
         local scope = holder and holder.Parent or workspace
         for _, p in ipairs(scope:GetDescendants()) do
@@ -353,8 +361,9 @@ local function startLoop()
                     end
                 end
             end
-            -- Chest & Egg hanya jalan kalau tidak ada target di map
-            if Config.FindChestEgg and foundCount == 0 then
+            -- Find Chest & Egg: jalan sendiri kalau ON (mobs mengalah soal teleport).
+            -- Attack tetap mukul oportunis dalam jarak.
+            if Config.FindChestEgg then
                 local now = os.clock()
                 getgenv().KillAuraNextChest = getgenv().KillAuraNextChest or 0
                 if now >= getgenv().KillAuraNextChest then
@@ -608,13 +617,13 @@ local DunRight = Tabs.Dungeon:AddRightGroupbox("Movement")
 
 DunLeft:AddToggle("KillAuraChestEgg", {
     Text = "Find Chest & Egg",
-    Tooltip = "Datangi Chest & Dragon Egg + fire prompt (tahan-F di-skip). Jalan kalau tidak ada target.",
+    Tooltip = "Datangi Chest & Dragon Egg + fire prompt (tahan-F di-skip). Kalau ON, dia yg pegang teleport.",
     Default = Config.FindChestEgg,
     Callback = function(v)
         Config.FindChestEgg = v
         if v then
             startLoop()
-            Library:Notify({ Title = "Chest & Egg ON", Description = "Aktif saat tidak ada target.", Time = 4 })
+            Library:Notify({ Title = "Chest & Egg ON", Description = "Otomatis ke chest/egg yg ada.", Time = 4 })
         end
     end,
 })
