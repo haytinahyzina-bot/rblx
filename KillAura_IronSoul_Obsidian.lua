@@ -52,18 +52,8 @@ local function doMobs()
     if not best then return end
     local pos=getPivotPos(best)
     if not pos or pos.Y<-200 then return end
-    -- buka pintu dulu (fire RoundDoor) biar teleport tidak di-void - seperti gumanba
     pcall(function()
-        for _,v in ipairs(workspace:GetDescendants()) do
-            if v:IsA("ProximityPrompt") and v.Enabled and v:GetFullName():find("RoundDoor") then
-                local part=v.Parent and (v.Parent:IsA("BasePart") and v.Parent or v.Parent:FindFirstChildWhichIsA("BasePart",true))
-                if part and (part.Position-hrp.Position).Magnitude<200 then fireproximityprompt(v) end
-            end
-        end
-    end)
-    task.wait(0.15)
-    pcall(function()
-        -- hover tiduran: di atas kepala, badan horizontal
+        -- langsung di atas kepala, tiduran wajah ke bawah (tanpa buka pintu dulu)
         local above = pos + Vector3.new(0, getgenv().Distance or 5, 0)
         hrp.CFrame = CFrame.new(above, Vector3.new(pos.X, above.Y, pos.Z)) * CFrame.Angles(0,0,math.rad(90))
         hrp.Velocity=Vector3.new(0,0,0)
