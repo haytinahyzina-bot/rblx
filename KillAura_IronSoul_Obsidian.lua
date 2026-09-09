@@ -141,8 +141,7 @@ local function moveStep()
     if not myRoot then return 0 end
     local enemies = getgenv().KillAuraCache or {}
     if #enemies == 0 then return 0 end
-    -- Find Chest & Egg yg pegang teleport kalau dia ON (biar tidak rebutan)
-    if Config.FindChestEgg then return #enemies end
+    -- Find Chest & Egg jalan di loop sendiri (tidak blokir Mobs) - mirip pola mereka
     local first = enemies[1]
     -- PENGAMAN target: skip target void/NaN biar tidak ikut nyemplung.
     if first and first.Pos then
