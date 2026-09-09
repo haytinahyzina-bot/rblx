@@ -52,41 +52,26 @@ local function doMobs()
     if not best then return end
     local pos=getPivotPos(best)
     if not pos or pos.Y<-200 then return end
+    -- jalan kaki ke musuh (bukan teleport) biar tidak ke-void - mirip gumanba yang smooth
     pcall(function()
-        -- langsung di atas kepala, tiduran wajah ke bawah (tanpa buka pintu dulu)
-        local above = pos + Vector3.new(0, getgenv().Distance or 5, 0)
-        hrp.CFrame = CFrame.new(above, Vector3.new(pos.X, above.Y, pos.Z)) * CFrame.Angles(0,0,math.rad(90))
-        hrp.Velocity=Vector3.new(0,0,0)
+        local hum=LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
+        if hum then hum:MoveTo(pos) end
     end)
 end
 
 -- Auto Attack: basic attack tanpa tekan, tanpa visual (spam terus walau Mobs OFF)
 local function doAttack()
     if not _G.Attack then return end
-    -- langsung spam basic attack (tanpa cek jarak/HP), seperti menekan Click terus
-    -- tanpa visual hit (tidak ubah Size/Transparency)
+    -- langsung spam basic attack (tanpa cek jarak/HP), seperti menekan Click terus - tanpa visual game
+    -- tanpa visual hit (tidak ubah Size/Transparency, tidak mainkan animasi)
     -- FIX BENAR: damage putih+rune di game ini bukan cuma Activate.
     -- Kalau script asli (gumanba) masih ter-load, pakai Attack asli mereka yang sudah terbukti 30->0.
-    local tool=LP.Character and LP.Character:FindFirstChildOfClass("Tool")
-    if not tool then local bp=LP:FindFirstChild("Backpack") tool=bp and bp:FindFirstChild("Weapon") if tool then local hum=getHum() if hum then pcall(function() hum:EquipTool(tool) end) end end end
-    if tool then pcall(function() tool:Activate() end) end
+    -- tanpa visual: jangan Activate (yang mainkan animasi), cukup fire remote damage putih+rune
     pcall(function()
         local rs=game:GetService("ReplicatedStorage")
         local re=rs:FindFirstChild("Remotes")
         local a=re and re:FindFirstChild("PlayerActionRE")
-        if a then a:FireServer() end
-        -- fallback firetouch biar tetap ada damage putih walau tanpa script asli
-        if tool and tool:FindFirstChild("Handle") then
-            for _,m in ipairs(workspace.EnemyNpc:GetChildren()) do
-                local h=m:FindFirstChildOfClass("Humanoid")
-                if h and h.Health>0 then
-                    local hrp=m:FindFirstChild("HumanoidRootPart")
-                    if hrp and (hrp.Position-hrp.Position).Magnitude<15 then
-                        pcall(function() firetouchinterest(tool.Handle, hrp, 0) firetouchinterest(tool.Handle, hrp, 1) end)
-                    end
-                end
-            end
-        end
+        if a then a:FireServer("Attack") end
     end)
 end
 
@@ -124,8 +109,8 @@ local function doFind()
     staying=false
 end
 
--- Loops
-task.spawn(function() while task.wait(0.02) do pcall(doMobs) end end)
+-- Loops - samakan gumanba: Mobs 0.5s (tidak 0.02s spam void), Attack 0.25s tanpa visual
+task.spawn(function() while task.wait(0.5) do pcall(doMobs) end end)
 task.spawn(function() while task.wait(0.25) do pcall(doAttack) end end)
 task.spawn(function() while task.wait(2.5) do pcall(doSkills) end end)
 task.spawn(function() while task.wait(2) do pcall(doFind) end end)
