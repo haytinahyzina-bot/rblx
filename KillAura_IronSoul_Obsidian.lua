@@ -60,21 +60,11 @@ local function doMobs()
     end)
 end
 
--- Auto Attack: pukul kalau ada target dalam jangkauan senjata
+-- Auto Attack: basic attack tanpa tekan, tanpa visual, tidak peduli HP musuh
 local function doAttack()
     if not _G.Attack then return end
-    local hrp=getHRP()
-    if not hrp then return end
-    local my=hrp.Position
-    local has=false
-    for _,m in ipairs(workspace.EnemyNpc:GetChildren()) do
-        local ok,h=pcall(function() return m:FindFirstChildOfClass("Humanoid") end)
-        if ok and h and h.Health>0 then
-            local pos=getPivotPos(m)
-            if pos and (pos-my).Magnitude < 15 then has=true; break end
-        end
-    end
-    if not has then return end
+    -- langsung spam basic attack (tanpa cek jarak/HP), seperti menekan Click terus
+    -- tanpa visual hit (tidak ubah Size/Transparency)
     -- FIX BENAR: damage putih+rune di game ini bukan cuma Activate.
     -- Kalau script asli (gumanba) masih ter-load, pakai Attack asli mereka yang sudah terbukti 30->0.
     pcall(function() if getgenv().Attack and type(getgenv().Attack)=="function" then getgenv().Attack(true) end end)
