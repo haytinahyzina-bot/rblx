@@ -27,8 +27,9 @@ local function getPivotPos(m)
     return nil
 end
 
--- Auto Mobs: teleport melayang tiduran di atas mob terdekat
+-- Auto Mobs: langsung ke musuh tanpa buka pintu 1-1 (mirip gumanba)
 local function doMobs()
+    if getgenv().Mobs and type(getgenv().Mobs)=="function" and _G.Mobs then return end -- biar gumanba yang urus, kita jangan rebutan
     if not _G.Mobs then return end
     local hrp=getHRP()
     if not hrp then return end
@@ -60,8 +61,9 @@ local function doMobs()
     end)
 end
 
--- Auto Attack: basic attack tanpa tekan, tanpa visual, tidak peduli HP musuh
+-- Auto Attack: basic attack tanpa tekan, tanpa visual, tidak peduli HP/distance
 local function doAttack()
+    if getgenv().Attack and type(getgenv().Attack)=="function" and _G.Attack then return end
     if not _G.Attack then return end
     -- langsung spam basic attack (tanpa cek jarak/HP), seperti menekan Click terus
     -- tanpa visual hit (tidak ubah Size/Transparency)
@@ -94,6 +96,7 @@ end
 -- Auto Skills: Q E R bergantian
 local skIdx=1
 local function doSkills()
+    if getgenv().Skills and type(getgenv().Skills)=="function" and _G.Skills then return end
     if not _G.Skills then return end
     local keys={Enum.KeyCode.Q,Enum.KeyCode.E,Enum.KeyCode.R}
     local k=keys[skIdx] skIdx=skIdx%#keys+1
@@ -104,6 +107,7 @@ end
 -- Find Chest & Egg: teleport stay ke prompt terdekat, fire tahan-F, tetap di situ
 local staying=false
 local function doFind()
+    if getgenv().Find and type(getgenv().Find)=="function" and _G.Find then return end
     if not _G.Find then staying=false; return end
     if staying then return end
     local hrp=getHRP()
@@ -132,13 +136,13 @@ task.spawn(function() while task.wait(2.5) do pcall(doSkills) end end)
 task.spawn(function() while task.wait(2) do pcall(doFind) end end)
 task.spawn(function() while task.wait(0.5) do if getgenv().WalkSpeedVal then local h=getHum() if h and h.WalkSpeed~=getgenv().WalkSpeedVal then pcall(function() h.WalkSpeed=getgenv().WalkSpeedVal end) end end end end)
 
--- UI persis seperti screenshot
-Box:AddToggle("AutoAttack",{Text="Auto Attack",Default=_G.Attack,Callback=function(v) _G.Attack=v end})
-Box:AddToggle("AutoSkills",{Text="Auto Skills",Default=_G.Skills,Callback=function(v) _G.Skills=v end})
+-- UI persis seperti screenshot - logika disamakan pakai fungsi asli gumanba bila ada
+Box:AddToggle("AutoAttack",{Text="Auto Attack",Default=_G.Attack,Callback=function(v) _G.Attack=v; pcall(function() if getgenv().Attack then getgenv().Attack(v) end end) end})
+Box:AddToggle("AutoSkills",{Text="Auto Skills",Default=_G.Skills,Callback=function(v) _G.Skills=v; pcall(function() if getgenv().Skills then getgenv().Skills(v) end end) end})
 Box:AddSlider("SetDistance",{Text="Set Distance",Default=getgenv().Distance,Min=2,Max=15,Rounding=0,Callback=function(v) getgenv().Distance=v end})
-Box:AddToggle("AutoMobs",{Text="Auto Mobs",Default=_G.Mobs,Callback=function(v) _G.Mobs=v end})
-Box:AddToggle("FindChestEgg",{Text="Find Chest & Egg",Default=_G.Find,Callback=function(v) _G.Find=v end})
-Box:AddSlider("WalkSpeed",{Text="Walk Speed",Default=getgenv().WalkSpeedVal,Min=16,Max=50,Rounding=0,Callback=function(v) getgenv().WalkSpeedVal=v end})
+Box:AddToggle("AutoMobs",{Text="Auto Mobs",Default=_G.Mobs,Callback=function(v) _G.Mobs=v; pcall(function() if getgenv().Mobs then getgenv().Mobs(v) end end) end})
+Box:AddToggle("FindChestEgg",{Text="Find Chest & Egg",Default=_G.Find,Callback=function(v) _G.Find=v; pcall(function() if getgenv().Find then getgenv().Find(v) end end) end})
+Box:AddSlider("WalkSpeed",{Text="Walk Speed",Default=getgenv().WalkSpeedVal,Min=16,Max=50,Rounding=0,Callback=function(v) getgenv().WalkSpeedVal=v; local h=getHum() if h then pcall(function() h.WalkSpeed=v end) end end})
 Box:AddLabel("YouTube: Tora IsMe",true)
 
 Library:Notify({Title="IRON SOUL: DUNGEON",Description="Mirip script asli - siap pakai",Time=4})
