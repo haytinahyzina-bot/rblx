@@ -21,13 +21,9 @@ local LP = Players.LocalPlayer
 local function getHRP() local c=LP.Character; return c and c:FindFirstChild("HumanoidRootPart") end
 local function getHum() local c=LP.Character; return c and c:FindFirstChildOfClass("Humanoid") end
 local function getPivotPos(m)
+    -- FIX: wajib HRP biar lengket di kepala, tidak ke void 0,-1jt
     local hrp=m:FindFirstChild("HumanoidRootPart")
     if hrp and hrp:IsA("BasePart") then return hrp.Position end
-    local pp=m.PrimaryPart
-    if pp and pp:IsA("BasePart") then return pp.Position end
-    for _,c in ipairs(m:GetChildren()) do if c:IsA("BasePart") then return c.Position end end
-    local ok,cf=pcall(function() return m:GetPivot() end)
-    if ok and cf then return cf.Position end
     return nil
 end
 
