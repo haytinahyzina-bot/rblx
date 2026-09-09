@@ -27,9 +27,8 @@ local function getPivotPos(m)
     return nil
 end
 
--- Auto Mobs: langsung ke musuh tanpa buka pintu 1-1 (mirip gumanba)
+-- Auto Mobs: langsung ke musuh (buka pintu dulu biar tidak ke-void, mirip gumanba)
 local function doMobs()
-    if getgenv().Mobs and type(getgenv().Mobs)=="function" and _G.Mobs then return end -- biar gumanba yang urus, kita jangan rebutan
     if not _G.Mobs then return end
     local hrp=getHRP()
     if not hrp then return end
@@ -53,6 +52,16 @@ local function doMobs()
     if not best then return end
     local pos=getPivotPos(best)
     if not pos or pos.Y<-200 then return end
+    -- buka pintu dulu (fire RoundDoor) biar teleport tidak di-void - seperti gumanba
+    pcall(function()
+        for _,v in ipairs(workspace:GetDescendants()) do
+            if v:IsA("ProximityPrompt") and v.Enabled and v:GetFullName():find("RoundDoor") then
+                local part=v.Parent and (v.Parent:IsA("BasePart") and v.Parent or v.Parent:FindFirstChildWhichIsA("BasePart",true))
+                if part and (part.Position-hrp.Position).Magnitude<200 then fireproximityprompt(v) end
+            end
+        end
+    end)
+    task.wait(0.15)
     pcall(function()
         -- hover tiduran: di atas kepala, badan horizontal
         local above = pos + Vector3.new(0, getgenv().Distance or 5, 0)
@@ -61,15 +70,13 @@ local function doMobs()
     end)
 end
 
--- Auto Attack: basic attack tanpa tekan, tanpa visual, tidak peduli HP/distance
+-- Auto Attack: basic attack tanpa tekan, tanpa visual (spam terus walau Mobs OFF)
 local function doAttack()
-    if getgenv().Attack and type(getgenv().Attack)=="function" and _G.Attack then return end
     if not _G.Attack then return end
     -- langsung spam basic attack (tanpa cek jarak/HP), seperti menekan Click terus
     -- tanpa visual hit (tidak ubah Size/Transparency)
     -- FIX BENAR: damage putih+rune di game ini bukan cuma Activate.
     -- Kalau script asli (gumanba) masih ter-load, pakai Attack asli mereka yang sudah terbukti 30->0.
-    pcall(function() if getgenv().Attack and type(getgenv().Attack)=="function" then getgenv().Attack(true) end end)
     local tool=LP.Character and LP.Character:FindFirstChildOfClass("Tool")
     if not tool then local bp=LP:FindFirstChild("Backpack") tool=bp and bp:FindFirstChild("Weapon") if tool then local hum=getHum() if hum then pcall(function() hum:EquipTool(tool) end) end end end
     if tool then pcall(function() tool:Activate() end) end
@@ -96,7 +103,6 @@ end
 -- Auto Skills: Q E R bergantian
 local skIdx=1
 local function doSkills()
-    if getgenv().Skills and type(getgenv().Skills)=="function" and _G.Skills then return end
     if not _G.Skills then return end
     local keys={Enum.KeyCode.Q,Enum.KeyCode.E,Enum.KeyCode.R}
     local k=keys[skIdx] skIdx=skIdx%#keys+1
@@ -107,7 +113,6 @@ end
 -- Find Chest & Egg: teleport stay ke prompt terdekat, fire tahan-F, tetap di situ
 local staying=false
 local function doFind()
-    if getgenv().Find and type(getgenv().Find)=="function" and _G.Find then return end
     if not _G.Find then staying=false; return end
     if staying then return end
     local hrp=getHRP()
@@ -136,12 +141,12 @@ task.spawn(function() while task.wait(2.5) do pcall(doSkills) end end)
 task.spawn(function() while task.wait(2) do pcall(doFind) end end)
 task.spawn(function() while task.wait(0.5) do if getgenv().WalkSpeedVal then local h=getHum() if h and h.WalkSpeed~=getgenv().WalkSpeedVal then pcall(function() h.WalkSpeed=getgenv().WalkSpeedVal end) end end end end)
 
--- UI persis seperti screenshot - logika disamakan pakai fungsi asli gumanba bila ada
-Box:AddToggle("AutoAttack",{Text="Auto Attack",Default=_G.Attack,Callback=function(v) _G.Attack=v; pcall(function() if getgenv().Attack then getgenv().Attack(v) end end) end})
-Box:AddToggle("AutoSkills",{Text="Auto Skills",Default=_G.Skills,Callback=function(v) _G.Skills=v; pcall(function() if getgenv().Skills then getgenv().Skills(v) end end) end})
+-- UI persis seperti screenshot - logika 1:1 gumanba, tanpa delegasi ganda
+Box:AddToggle("AutoAttack",{Text="Auto Attack",Default=_G.Attack,Callback=function(v) _G.Attack=v end})
+Box:AddToggle("AutoSkills",{Text="Auto Skills",Default=_G.Skills,Callback=function(v) _G.Skills=v end})
 Box:AddSlider("SetDistance",{Text="Set Distance",Default=getgenv().Distance,Min=2,Max=15,Rounding=0,Callback=function(v) getgenv().Distance=v end})
-Box:AddToggle("AutoMobs",{Text="Auto Mobs",Default=_G.Mobs,Callback=function(v) _G.Mobs=v; pcall(function() if getgenv().Mobs then getgenv().Mobs(v) end end) end})
-Box:AddToggle("FindChestEgg",{Text="Find Chest & Egg",Default=_G.Find,Callback=function(v) _G.Find=v; pcall(function() if getgenv().Find then getgenv().Find(v) end end) end})
+Box:AddToggle("AutoMobs",{Text="Auto Mobs",Default=_G.Mobs,Callback=function(v) _G.Mobs=v end})
+Box:AddToggle("FindChestEgg",{Text="Find Chest & Egg",Default=_G.Find,Callback=function(v) _G.Find=v end})
 Box:AddSlider("WalkSpeed",{Text="Walk Speed",Default=getgenv().WalkSpeedVal,Min=16,Max=50,Rounding=0,Callback=function(v) getgenv().WalkSpeedVal=v; local h=getHum() if h then pcall(function() h.WalkSpeed=v end) end end})
 Box:AddLabel("YouTube: Tora IsMe",true)
 
