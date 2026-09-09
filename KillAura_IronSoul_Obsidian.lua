@@ -18,6 +18,7 @@ getgenv().KillAuraConfig = getgenv().KillAuraConfig or {
     PositionMode = "Above", -- "Above" = melayang tiduran di atas target, "Inside" = di dalam target sejajar tanah
     Distance = 5,           -- jarak player dari target (mode Inside)
     HeightOffset = 3,       -- jarak melayang di atas pivot target (mode Above); yg work ~1, naikkan kalau kena damage
+    FlySpeed = 120,         -- kecepatan meluncur studs/detik (yg work geraknya mulus, bukan teleport instan)
     AutoEquip = true,       -- auto equip Weapon dari Backpack
     MaxTargets = 10,        -- max musuh per tick (cegah lag)
     AutoSkill = false,      -- auto pakai skill Q/E/R bergantian
@@ -171,29 +172,55 @@ end
 
 -- Gerak CEPAT tiap frame (Heartbeat): biar pose tiduran stabil seperti script yg work.
 -- (Update 0.25s terlalu lambat -> badan sempat balik berdiri / jatuh.)
+-- CACHE target: scan berat (GetDescendants) hanya 1x/detik oleh thread lambat.
+-- Mover tiap frame PAKAI CACHE (tanpa scan) biar tidak mencekik game.
+getgenv().KillAuraCache = getgenv().KillAuraCache or {}
+getgenv().KillAuraTpCount = getgenv().KillAuraTpCount or 0
+getgenv().KillAuraScanCount = getgenv().KillAuraScanCount or 0
+
+local function refreshTargets()
+    local char = getCharacter()
+    local myRoot = char and getHRP(char)
+    if not myRoot then return {} end
+    local list = findTargets(myRoot.Position)
+    getgenv().KillAuraCache = list
+    getgenv().KillAuraFound = #list
+    getgenv().KillAuraScanCount = getgenv().KillAuraScanCount + 1
+    return list
+end
+
 local function moveStep()
     if not Config.AutoMobs then return 0 end
     local char = getCharacter()
     local myRoot = char and getHRP(char)
     if not myRoot then return 0 end
-    local enemies = findTargets(myRoot.Position)
-    getgenv().KillAuraFound = #enemies
+    local enemies = getgenv().KillAuraCache or {}
     if #enemies == 0 then return 0 end
     -- Find Chest & Egg yg pegang teleport kalau dia ON (biar tidak rebutan)
     if Config.FindChestEgg then return #enemies end
     local first = enemies[1]
-    -- PENGAMAN: kalau kita sendiri nyangkut di void (Y<-200), diam saja tunggu respawn.
-    -- Target ngaco (void/NaN) juga di-skip biar tidak ikut nyemplung.
+    -- PENGAMAN target: skip target void/NaN biar tidak ikut nyemplung.
     if first and first.Pos then
-        local fp, mp = first.Pos, myRoot.Position
-        if mp.Y < -200 then return #enemies end
-        if fp.Y < -200 or fp.Y ~= fp.Y or fp.X ~= fp.X or fp.Z ~= fp.Z then return #enemies end
+        local fp = first.Pos
+        if fp.Y < -200 or fp.Y ~= fp.Y or fp.X ~= fp.X or fp.Z ~= fp.Z then
+            return #enemies
+        end
+        -- Recovery: kalau kita nyangkut di void/staging, snap SEKALI ke arena
+        -- (1x lompat jauh ditoleransi; yg dihukum server = teleport spam tiap frame)
+        local mp = myRoot.Position
+        if mp.Y < -200 then
+            pcall(function()
+                myRoot.CFrame = CFrame.new(fp + Vector3.new(0, Config.HeightOffset, 0))
+                myRoot.Velocity = Vector3.new(0, 0, 0)
+            end)
+            return #enemies
+        end
         if Config.PositionMode == "Above" then
             pcall(function()
-                -- Hover di atas pivot target, badan horizontal menghadap target
-                -- (meniru yg work: d=0, dy kecil, upY=0, lookY=0)
-                local above = first.Pos + Vector3.new(0, Config.HeightOffset, 0)
-                myRoot.CFrame = CFrame.new(above, Vector3.new(first.Pos.X, above.Y, first.Pos.Z))
+                -- TELEPORT instan ke atas target (sesuai permintaan: mobs = teleport, bukan lari/gliding)
+                -- Pose tiduran horizontal (roll 90Â°).
+                local above = fp + Vector3.new(0, Config.HeightOffset, 0)
+                myRoot.CFrame = CFrame.new(above, Vector3.new(fp.X, above.Y, fp.Z))
                     * CFrame.Angles(0, 0, math.rad(90))
                 myRoot.Velocity = Vector3.new(0, 0, 0)
             end)
@@ -219,7 +246,13 @@ local function attackOnce()
     local myRoot = getHRP(char)
     if not myRoot then return 0, 0 end
     local tool = ensureWeapon()
-    local enemies = findTargets(myRoot.Position)
+    -- saat stay di egg/chest, attack tetap jalan tapi tanpa teleport tambahan
+    if getgenv().KillAuraStayEgg then
+        -- pukul prop/egg di depan kita saja (tanpa pindah)
+    end
+    -- pakai cache (di-refresh thread lambat); scan langsung hanya kalau cache kosong
+    local enemies = getgenv().KillAuraCache or {}
+    if #enemies == 0 then enemies = findTargets(myRoot.Position) end
     if #enemies == 0 then return 0, 0 end
     -- AUTO ATTACK (bisa ON/OFF sendiri): pukul hanya target yg masuk jarak senjata.
     if not Config.Enabled then return #enemies, 0 end
@@ -285,39 +318,55 @@ local function collectChestEgg()
         end
     end
     if not best then return false end
-    -- Dekat ke prompt (3 studs), tunggu prompt ke-stream, lalu fire.
-    -- fireproximityprompt men-trigger LANGSUNG walau prompt-nya tipe "tahan F" (HoldDuration di-skip).
+    -- Stay di dekat prompt (3 studs), tunggu prompt ke-stream, lalu fire.
+    -- Tetap berdiri di situ seperti script mereka (tidak balik ke mob).
     pcall(function()
         myRoot.CFrame = CFrame.new(best.Position + Vector3.new(0, 3, 0))
         myRoot.Velocity = Vector3.new(0, 0, 0)
     end)
-    task.wait(0.6)
-    pcall(function()
-        -- target utama dulu (tahan-F di-skip oleh fireproximityprompt)
-        if bestPrompt and bestPrompt.Enabled then
-            fireproximityprompt(bestPrompt)
-            task.wait(0.3)
-        end
-        local holder = best.Parent
-        local scope = holder and holder.Parent or workspace
-        for _, p in ipairs(scope:GetDescendants()) do
-            if p:IsA("ProximityPrompt") and p.Enabled then
-                local pp = p.Parent
-                local part = pp and (pp:IsA("BasePart") and pp or pp:FindFirstChildWhichIsA("BasePart", true))
-                if part and (part.Position - myRoot.Position).Magnitude < 20 then
-                    fireproximityprompt(p)
-                    task.wait(0.2)
-                    -- tembak 2x untuk prompt tahan-lama yg rewel
-                    if p.Enabled then fireproximityprompt(p) end
+    getgenv().KillAuraStayEgg = true
+    task.spawn(function()
+        local tries = 0
+        while tries < 12 and getgenv().KillAuraStayEgg do
+            tries = tries + 1
+            pcall(function()
+                -- target utama dulu (tahan-F di-skip oleh fireproximityprompt)
+                if bestPrompt and bestPrompt.Enabled then
+                    fireproximityprompt(bestPrompt)
                 end
-            end
+                local holder = best.Parent
+                local scope = holder and holder.Parent or workspace
+                for _, p in ipairs(scope:GetDescendants()) do
+                    if p:IsA("ProximityPrompt") and p.Enabled then
+                        local pp = p.Parent
+                        local part = pp and (pp:IsA("BasePart") and pp or pp:FindFirstChildWhichIsA("BasePart", true))
+                        if part and (part.Position - myRoot.Position).Magnitude < 20 then
+                            fireproximityprompt(p)
+                        end
+                    end
+                end
+            end)
+            task.wait(1)
+            -- kalau sudah tidak ada prompt chest/egg di sini, anggap selesai dan keluar stay
+            local still = false
+            pcall(function()
+                local holder = best.Parent
+                local scope = holder and holder.Parent or workspace
+                for _, p in ipairs(scope:GetDescendants()) do
+                    if p:IsA("ProximityPrompt") and p.Enabled then still = true; break end
+                end
+            end)
+            if not still then getgenv().KillAuraStayEgg = false; break end
+            -- kalau musuh baru muncul dan Auto Mobs ON, biarin loop utama yg atur; stay tetap jalan sampai prompt habis
         end
+        if tries >= 12 then getgenv().KillAuraStayEgg = false end
     end)
     return true
 end
 
 getgenv().KillAuraLoopRunning = getgenv().KillAuraLoopRunning or false
 getgenv().KillAuraTotalHits = getgenv().KillAuraTotalHits or 0
+getgenv().KillAuraVer = "v10-glide-obsidian"
 
 -- Forward declarations buat UI handles (diisi setelah window jadi)
 local ui = {
@@ -334,11 +383,23 @@ end
 local function startLoop()
     if getgenv().KillAuraLoopRunning then return end
     getgenv().KillAuraLoopRunning = true
-    -- MOVER CEPAT tiap frame: pose tiduran stabil (meniru yg work, tanpa PlatformStand)
+    -- MOVER CEPAT tiap frame: teleport instan (stay di target)
     task.spawn(function()
         local rs = game:GetService("RunService")
         while getgenv().KillAuraLoopRunning do
-            pcall(moveStep)
+            if not getgenv().KillAuraStayEgg then
+                pcall(moveStep)
+            else
+                -- Stay mode: jangan teleport lagi kalau sudah di dekat chest/egg (3 studs)
+                local char = getCharacter()
+                local myRoot = char and getHRP(char)
+                if myRoot then
+                    local e = getgenv().KillAuraCache and getgenv().KillAuraCache[1]
+                    if not e or (e.Pos - myRoot.Position).Magnitude > 8 then
+                        pcall(moveStep)
+                    end
+                end
+            end
             rs.Heartbeat:Wait()
         end
     end)
@@ -377,6 +438,10 @@ local function startLoop()
                 end
             end
             tick = tick + 1
+            -- Refresh cache target 1x/detik (scan berat cukup di sini, mover pakai cache)
+            if tick % 4 == 1 then
+                pcall(refreshTargets)
+            end
             -- Auto skill tiap SkillDelay detik (toggle sendiri, tidak ikut Auto Attack)
             if Config.AutoSkill then
                 local now = os.clock()
@@ -564,6 +629,15 @@ CombatRight:AddSlider("KillAuraHeight", {
     Max = 25,
     Rounding = 0,
     Callback = function(v) Config.HeightOffset = v end,
+})
+
+CombatRight:AddSlider("KillAuraFlySpeed", {
+    Text = "Fly Speed",
+    Default = Config.FlySpeed,
+    Min = 30,
+    Max = 300,
+    Rounding = 0,
+    Callback = function(v) Config.FlySpeed = v end,
 })
 
 CombatRight:AddSlider("KillAuraMaxTargets", {
