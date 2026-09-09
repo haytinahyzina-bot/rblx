@@ -75,10 +75,30 @@ local function doAttack()
         end
     end
     if not has then return end
+    -- FIX BENAR: damage putih+rune di game ini bukan cuma Activate.
+    -- Kalau script asli (gumanba) masih ter-load, pakai Attack asli mereka yang sudah terbukti 30->0.
+    pcall(function() if getgenv().Attack and type(getgenv().Attack)=="function" then getgenv().Attack(true) end end)
     local tool=LP.Character and LP.Character:FindFirstChildOfClass("Tool")
     if not tool then local bp=LP:FindFirstChild("Backpack") tool=bp and bp:FindFirstChild("Weapon") if tool then local hum=getHum() if hum then pcall(function() hum:EquipTool(tool) end) end end end
     if tool then pcall(function() tool:Activate() end) end
-    pcall(function() local rs=game:GetService("ReplicatedStorage") local re=rs:FindFirstChild("Remotes") local a=re and re:FindFirstChild("PlayerActionRE") if a then a:FireServer() end end)
+    pcall(function()
+        local rs=game:GetService("ReplicatedStorage")
+        local re=rs:FindFirstChild("Remotes")
+        local a=re and re:FindFirstChild("PlayerActionRE")
+        if a then a:FireServer() end
+        -- fallback firetouch biar tetap ada damage putih walau tanpa script asli
+        if tool and tool:FindFirstChild("Handle") then
+            for _,m in ipairs(workspace.EnemyNpc:GetChildren()) do
+                local h=m:FindFirstChildOfClass("Humanoid")
+                if h and h.Health>0 then
+                    local hrp=m:FindFirstChild("HumanoidRootPart")
+                    if hrp and (hrp.Position-hrp.Position).Magnitude<15 then
+                        pcall(function() firetouchinterest(tool.Handle, hrp, 0) firetouchinterest(tool.Handle, hrp, 1) end)
+                    end
+                end
+            end
+        end
+    end)
 end
 
 -- Auto Skills: Q E R bergantian
